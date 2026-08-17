@@ -7,6 +7,7 @@ Zero-wait completion voice release.
 ### Fixed
 
 - Completion voice now fires the moment the SUCCESS pulse lands: a hidden PowerShell SoundPlayer worker is preloaded on plugin start and reused across completions, eliminating the 1–3s `powershell.exe` cold-start delay that previously made the cue feel lagged.
+- Removed Qt's `QApplication.beep()` from the SUCCESS/ERROR alert path so the user hears a single TTS cue instead of the system "ding" stacked on top of the voice.
 
 ### Update
 

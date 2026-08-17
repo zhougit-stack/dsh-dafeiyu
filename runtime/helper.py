@@ -707,10 +707,9 @@ def run_visual(recorder: EventRecorder, snapshot_path: Path | None = None) -> in
                 )
 
         def _notify_alert(self, state: str) -> None:
-            try:
-                QApplication.beep()
-            except Exception:
-                pass
+            # The completion voice lives in the Node plugin (src/completion-voice.js)
+            # and fires the TTS cue on the SUCCESS pulse.  Skip Qt's system beep so
+            # the user hears a single cue instead of "ding" + TTS stacked together.
             self._shake_window()
 
         def _shake_window(self) -> None:

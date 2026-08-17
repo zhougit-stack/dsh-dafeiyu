@@ -11,4 +11,10 @@ __pycache__/
 .pytest_cache/
 .dsh-phase0/
 
+# runtime/bin/ stays ignored: the PyInstaller-bundled helper.exe is ~50 MB
+# and is shipped through the npm tarball (npm pack follows the `files`
+# allow-list in package.json, NOT .gitignore).  A maintainer can still
+# force-add it with `git add -f runtime/bin/win32-x64/dsh-dafeiyu-helper.exe`
+# for a one-off vendor commit.
+
 package-lock.json
