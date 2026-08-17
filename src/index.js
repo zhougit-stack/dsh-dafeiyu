@@ -1,5 +1,6 @@
 import Schema from '@deepseek-ai/schemastery'
 import { CompanionReducer } from './companion-reducer.js'
+import { CompletionVoice } from './completion-voice.js'
 import { HelperProcess } from './helper-process.js'
 import {
   CompanionMessageKind,
@@ -21,6 +22,7 @@ export const Config = Schema.object({
   ]).default('normal').description('空闲微动作频率'),
   reducedMotion: Schema.boolean().default(false).description('减少走动、循环帧和程序化晃动'),
   includeSubagents: Schema.boolean().default(false).description('允许子 Agent 抢占宠物状态'),
+  completionVoice: Schema.boolean().default(true).description('任务完成时播放语音提示'),
 }).description('由 DeepSeek Harness 状态驱动的桌面大肥鱼伴侣')
 
 const defaults = Object.freeze({
@@ -30,6 +32,7 @@ const defaults = Object.freeze({
   activityLevel: 'normal',
   reducedMotion: false,
   includeSubagents: false,
+  completionVoice: true,
 })
 
 function publicConfig(config = {}) {
@@ -40,6 +43,7 @@ function publicConfig(config = {}) {
     activityLevel: config.activityLevel ?? defaults.activityLevel,
     reducedMotion: config.reducedMotion ?? defaults.reducedMotion,
     includeSubagents: config.includeSubagents ?? defaults.includeSubagents,
+    completionVoice: config.completionVoice ?? defaults.completionVoice,
   }
 }
 
@@ -122,6 +126,7 @@ function mount(ctx, config = {}, eventCtx = ctx) {
   let bridge
   let reducer
   let restartTimer
+  const completionVoice = new CompletionVoice({ logger })
 
   const stopRuntime = (reason = 'settings-change') => {
     bridge?.stop(reason)
@@ -195,7 +200,18 @@ function mount(ctx, config = {}, eventCtx = ctx) {
   // the registrations explicitly with this plugin's lifecycle.
   const offEvent = eventCtx.on('session/event', (session, event) => {
     if (!bridge || !reducer) return
-    for (const message of reducer.handle(session, event)) bridge.send(message)
+    const messages = reducer.handle(session, event)
+    // The SUCCESS pulse is exactly the moment the pet celebrates a finished
+    // turn, so the voice cue rides the same signal (and stays silent when the
+    // pulse is suppressed by a higher-priority waiting/error session).
+    for (const message of messages) {
+      if (message.kind === CompanionMessageKind.PULSE
+        && message.state === CompanionState.SUCCESS
+        && settings.get().completionVoice !== false) {
+        completionVoice.play()
+      }
+    }
+    for (const message of messages) bridge.send(message)
   }, { global: true })
   const offDisposed = eventCtx.on('session/disposed', (session) => {
     if (!bridge || !reducer) return
