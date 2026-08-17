@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.0-alpha.11
+
+Zero-wait completion voice release.
+
+### Fixed
+
+- Completion voice now fires the moment the SUCCESS pulse lands: a hidden PowerShell SoundPlayer worker is preloaded on plugin start and reused across completions, eliminating the 1–3s `powershell.exe` cold-start delay that previously made the cue feel lagged.
+
+### Update
+
+Fully exit DSH, then run:
+
+```powershell
+dsh plugin --profile web update dsh-dafeiyu@alpha
+```
+
+Restart DSH after the update.
+
 ## 0.1.0-alpha.10
 
 WSL2 support and Issue #12 desktop interaction enhancements.

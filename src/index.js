@@ -128,6 +128,13 @@ function mount(ctx, config = {}, eventCtx = ctx) {
   let restartTimer
   const completionVoice = new CompletionVoice({ logger })
 
+  // Warm the persistent PowerShell player as soon as the plugin loads so the
+  // first completion does not wait on powershell.exe cold start (1-3s+).
+  const ensureVoiceWorker = (next) => {
+    if (next?.completionVoice !== false) completionVoice.warmup()
+    else completionVoice.stop()
+  }
+
   const stopRuntime = (reason = 'settings-change') => {
     bridge?.stop(reason)
     bridge = undefined
@@ -194,6 +201,7 @@ function mount(ctx, config = {}, eventCtx = ctx) {
   }
 
   startRuntime(settings.get())
+  ensureVoiceWorker(settings.get())
 
   // The companion intentionally observes every DSH session. Loader entries may
   // live inside a scoped composition, so use the unscoped root bus and dispose
@@ -229,8 +237,10 @@ function mount(ctx, config = {}, eventCtx = ctx) {
         restartTimer = undefined
       }
       stopRuntime('settings-change')
+      completionVoice.stop()
       return
     }
+    ensureVoiceWorker(next)
     if (!bridge) {
       scheduleRestart(next)
       return
@@ -255,6 +265,7 @@ function mount(ctx, config = {}, eventCtx = ctx) {
     offEvent?.()
     offDisposed?.()
     unwatch()
+    completionVoice.stop()
     stopRuntime('dsh-host-stop')
   })
 }
