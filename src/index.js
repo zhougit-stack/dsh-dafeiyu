@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import Schema from '@deepseek-ai/schemastery'
 import { CompanionReducer } from './companion-reducer.js'
 import { CompletionVoice } from './completion-voice.js'
@@ -8,8 +9,15 @@ import {
   createMessage,
 } from './protocol.js'
 
+const require = createRequire(import.meta.url)
+const pkg = require('../package.json')
+
 export const name = 'dsh-dafeiyu'
-export const inject = ['sessions']
+// The plugin's feature is built on session events, and mounting requires the
+// settings service (used to read live config). Keep the declared inject in
+// sync with those real hard dependencies instead of listing a service that
+// is never consumed directly.
+export const inject = ['sessions', 'settings']
 export const CONFIG_ENDPOINT = '/plugins/dsh-dafeiyu/config'
 export const Config = Schema.object({
   enabled: Schema.boolean().default(true).description('启用桌面大肥鱼'),
@@ -21,6 +29,12 @@ export const Config = Schema.object({
     Schema.const('lively').description('活泼'),
   ]).default('normal').description('空闲微动作频率'),
   reducedMotion: Schema.boolean().default(false).description('减少走动、循环帧和程序化晃动'),
+  bubbleMode: Schema.union([
+    Schema.const('always').description('常驻显示'),
+    Schema.const('hidden').description('完全隐藏'),
+    Schema.const('custom').description('自定义显示状态'),
+  ]).default('always').description('气泡显示模式'),
+  bubbleStates: Schema.array(Schema.string()).default(['SUCCESS', 'ERROR', 'WAITING']).description('自定义模式下显示气泡的状态'),
   includeSubagents: Schema.boolean().default(false).description('允许子 Agent 抢占宠物状态'),
   completionVoice: Schema.boolean().default(true).description('任务完成时播放语音提示'),
 }).description('由 DeepSeek Harness 状态驱动的桌面大肥鱼伴侣')
@@ -31,6 +45,8 @@ const defaults = Object.freeze({
   bubbleScale: 1,
   activityLevel: 'normal',
   reducedMotion: false,
+  bubbleMode: 'always',
+  bubbleStates: ['SUCCESS', 'ERROR', 'WAITING'],
   includeSubagents: false,
   completionVoice: true,
 })
@@ -42,6 +58,8 @@ function publicConfig(config = {}) {
     bubbleScale: config.bubbleScale ?? defaults.bubbleScale,
     activityLevel: config.activityLevel ?? defaults.activityLevel,
     reducedMotion: config.reducedMotion ?? defaults.reducedMotion,
+    bubbleMode: config.bubbleMode ?? defaults.bubbleMode,
+    bubbleStates: Array.isArray(config.bubbleStates) ? config.bubbleStates : defaults.bubbleStates,
     includeSubagents: config.includeSubagents ?? defaults.includeSubagents,
     completionVoice: config.completionVoice ?? defaults.completionVoice,
   }
@@ -153,6 +171,8 @@ function mount(ctx, config = {}, eventCtx = ctx) {
       bubbleScale: next.bubbleScale ?? defaults.bubbleScale,
       activityLevel: next.activityLevel ?? defaults.activityLevel,
       reducedMotion: next.reducedMotion === true,
+      bubbleMode: next.bubbleMode ?? defaults.bubbleMode,
+      bubbleStates: Array.isArray(next.bubbleStates) ? next.bubbleStates : defaults.bubbleStates,
     }))
   }
 
@@ -179,6 +199,8 @@ function mount(ctx, config = {}, eventCtx = ctx) {
         DSH_DAFEIYU_BUBBLE_SCALE: String(resolved.bubbleScale ?? defaults.bubbleScale),
         DSH_DAFEIYU_ACTIVITY_LEVEL: String(resolved.activityLevel ?? defaults.activityLevel),
         DSH_DAFEIYU_REDUCED_MOTION: resolved.reducedMotion === true ? '1' : '0',
+        DSH_DAFEIYU_BUBBLE_MODE: String(resolved.bubbleMode ?? defaults.bubbleMode),
+        DSH_DAFEIYU_BUBBLE_STATES: (Array.isArray(resolved.bubbleStates) ? resolved.bubbleStates : defaults.bubbleStates).join(','),
         DSH_DAFEIYU_WEBUI_URL: String(config.webuiUrl ?? process.env.DSH_DAFEIYU_WEBUI_URL ?? 'http://127.0.0.1:3080/'),
       },
     }, logger)
@@ -187,7 +209,7 @@ function mount(ctx, config = {}, eventCtx = ctx) {
     bridge.send(createMessage(CompanionMessageKind.HELLO, {
       state: CompanionState.IDLE,
       host: 'deepseek-harness',
-      pluginVersion: '0.1.0-alpha.7',
+      pluginVersion: pkg.version,
       message: 'BigFish connected to DSH',
     }))
     bridge.send(createMessage(CompanionMessageKind.STATE, {
@@ -206,24 +228,36 @@ function mount(ctx, config = {}, eventCtx = ctx) {
   // The companion intentionally observes every DSH session. Loader entries may
   // live inside a scoped composition, so use the unscoped root bus and dispose
   // the registrations explicitly with this plugin's lifecycle.
+  // Never let an exception from this optional companion escape into the shared
+  // session bus: a throw here could stop every other subscriber from seeing
+  // the event, which would look exactly like "installing the pet broke other
+  // plugins".
   const offEvent = eventCtx.on('session/event', (session, event) => {
     if (!bridge || !reducer) return
-    const messages = reducer.handle(session, event)
-    // The SUCCESS pulse is exactly the moment the pet celebrates a finished
-    // turn, so the voice cue rides the same signal (and stays silent when the
-    // pulse is suppressed by a higher-priority waiting/error session).
-    for (const message of messages) {
-      if (message.kind === CompanionMessageKind.PULSE
-        && message.state === CompanionState.SUCCESS
-        && settings.get().completionVoice !== false) {
-        completionVoice.play()
+try {
+      const messages = reducer.handle(session, event)
+      // The SUCCESS pulse is exactly the moment the pet celebrates a finished
+      // turn, so the voice cue rides the same signal (and stays silent when
+      // the pulse is suppressed by a higher-priority waiting/error session).
+      for (const message of messages) {
+        if (message.kind === CompanionMessageKind.PULSE
+          && message.state === CompanionState.SUCCESS
+          && settings.get().completionVoice !== false) {
+          completionVoice.play()
+        }
       }
+      for (const message of messages) bridge.send(message)
+    } catch (error) {
+      logger.error?.('dsh-dafeiyu failed to handle session event', error)
     }
-    for (const message of messages) bridge.send(message)
   }, { global: true })
   const offDisposed = eventCtx.on('session/disposed', (session) => {
     if (!bridge || !reducer) return
-    for (const message of reducer.disposeSession(session)) bridge.send(message)
+    try {
+      for (const message of reducer.disposeSession(session)) bridge.send(message)
+    } catch (error) {
+      logger.error?.('dsh-dafeiyu failed to dispose session', error)
+    }
   }, { global: true })
 
   const unwatch = settings.watch((next) => {
